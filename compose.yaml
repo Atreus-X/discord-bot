@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  discord-bot:
+    container_name: discord-bot
+    restart: unless-stopped
+    image: discord-bot
+    # Mount volumes
+    # ./private:/app/private:ro  - Mounts your 'private' directory (for service_account.json) as read-only.
+    # /var/log/docker/discord-bot.log:/app/bot.log - Maps the container's log file to the host.
+    volumes:
+      - ./private:/app/private:ro
+      - /var/log/docker/discord-bot.log:/app/bot.log
+    # Use an environment file for secrets
+    env_file:
+      - .env

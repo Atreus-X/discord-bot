@@ -1,2 +1,5 @@
 private/
-compose.yaml
+venv/
+#compose.yaml
+credentials.json
+.env
