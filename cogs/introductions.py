@@ -2,20 +2,17 @@ import discord
 from discord.ext import commands
 import asyncio
 import os
+import logging
 
-# --- Configuration (using environment variables) ---
-# NOTE: TOKEN and INTRO_CHANNEL_ID are now handled by main.py
-# and the bot instance, so these lines can be removed.
-# INTRO_CHANNEL_ID is a parameter you can pass to the cog, or keep as an env var.
+# --- Configuration ---
 INTRO_CHANNEL_ID = int(os.environ.get('INTRO_CHANNEL_ID', '0'))
 
 # --- Data Storage ---
-# These can be properties of the class
 introduction_responses = {}
 temp_channels = {}
 temp_channel_timeouts = {}
 
-# --- Timezone Options (categorized for multiple dropdowns) ---
+# --- Timezone Options ---
 TIMEZONE_OPTIONS_BY_REGION = {
     "North America": [
         "EST (GMT -5:00)", "CST (GMT -6:00)", "MST (GMT -7:00)", "PST (GMT -8:00)",
@@ -35,11 +32,8 @@ TIMEZONE_OPTIONS_BY_REGION = {
     ]
 }
 
-# --- Custom UI Views for Multi-Level Selection ---
-# These classes can remain outside the cog class or be nested within it.
-# They will need to be updated to reference the bot instance correctly.
+# --- Custom UI Views ---
 class TimezoneCategorySelect(discord.ui.Select):
-    """First dropdown for selecting a timezone region."""
     def __init__(self, parent_view):
         self.parent_view = parent_view
         options = [discord.SelectOption(label=region, value=region) for region in TIMEZONE_OPTIONS_BY_REGION.keys()]
@@ -52,7 +46,6 @@ class TimezoneCategorySelect(discord.ui.Select):
         await interaction.response.edit_message(content=f"You selected region: {selected_region}. Now choose your specific timezone.", view=self.parent_view)
 
 class TimezoneDetailSelect(discord.ui.Select):
-    """Second dropdown for selecting a specific timezone within a chosen region."""
     def __init__(self, parent_view, user_id, selected_region):
         self.parent_view = parent_view
         self.user_id = user_id
@@ -68,7 +61,6 @@ class TimezoneDetailSelect(discord.ui.Select):
         self.parent_view.stop()
 
 class MultiSelectView(discord.ui.View):
-    """A view that manages both the region and detail dropdowns."""
     def __init__(self, user_id):
         super().__init__(timeout=180)
         self.user_id = user_id
@@ -78,6 +70,7 @@ class MultiSelectView(discord.ui.View):
         self.stop()
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
+        logging.error(f"Error in MultiSelectView for user {interaction.user.id}", exc_info=error)
         await interaction.response.send_message(f"An error occurred: {error}", ephemeral=True)
         self.stop()
 
@@ -85,14 +78,11 @@ class MultiSelectView(discord.ui.View):
 class IntroductionsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Re-initialize data storage for the cog instance
         self.introduction_responses = {}
         self.temp_channels = {}
         self.temp_channel_timeouts = {}
 
-    # Helper function for cleanup (now a method of the class)
     async def cleanup_introduction(self, user_id):
-        # Use self.introduction_responses etc.
         if user_id in self.introduction_responses:
             del self.introduction_responses[user_id]
         if user_id in self.temp_channel_timeouts:
@@ -104,44 +94,40 @@ class IntroductionsCog(commands.Cog):
                 if self.bot.get_channel(temp_channel.id):
                     await temp_channel.delete(reason="Introduction process completed or cancelled")
             except discord.Forbidden:
-                print(f"Warning: Bot lacks permission to delete temporary channel for user {user_id} ({temp_channel.name}).")
+                logging.warning(f"Bot lacks permission to delete temporary channel for user {user_id} ({temp_channel.name}).")
                 user = self.bot.get_user(user_id)
                 if user:
                     try:
                         await user.send(f"I've completed your introduction but couldn't delete your temporary channel ({temp_channel.mention}). Please delete it manually if you're done.")
                     except discord.Forbidden:
-                        print(f"Warning: Could not send DM to user {user_id} about channel deletion failure.")
+                        logging.warning(f"Could not send DM to user {user_id} about channel deletion failure.")
             except Exception as e:
-                print(f"Error deleting temporary channel for user {user_id}: {e}")
+                logging.error(f"Error deleting temporary channel for user {user_id}", exc_info=e)
                 user = self.bot.get_user(user_id)
                 if user:
                     try:
                         await user.send(f"An error occurred while deleting your temporary channel ({temp_channel.mention}): {e}. Please delete it manually if you're done.")
                     except discord.Forbidden:
-                        print(f"Warning: Could not send DM to user {user_id} about channel deletion failure.")
+                        logging.warning(f"Could not send DM to user {user_id} about channel deletion failure.")
             finally:
                 del self.temp_channels[user_id]
 
-    # --- Bot Slash Commands (now a method of the class) ---
     @commands.hybrid_command(name="introductions", description="Start the introduction process to introduce yourself in a private channel.")
-    async def introductions_slash(self, interaction: discord.Interaction):
-        user = interaction.user
-        guild = interaction.guild
-
-        # ... (The rest of your command logic remains largely the same,
-        # but you must use `self.` to reference the bot instance and class properties)
+    async def introductions_slash(self, ctx: commands.Context):
+        user = ctx.author
+        guild = ctx.guild
 
         if not guild:
-            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            await ctx.send("This command can only be used in a server.", ephemeral=True)
             return
 
         user_id = user.id
 
         if user_id in self.introduction_responses:
-            await interaction.response.send_message("You are already completing an introduction. Please finish or wait for the process to timeout.", ephemeral=True)
+            await ctx.send("You are already completing an introduction. Please finish or wait for the process to timeout.", ephemeral=True)
             return
 
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        await ctx.defer(ephemeral=True)
 
         channel_name = f"intro-{user.name.lower().replace(' ', '-')}"
         channel_name = "".join(c for c in channel_name if c.isalnum() or c == '-').lower()
@@ -161,7 +147,7 @@ class IntroductionsCog(commands.Cog):
             self.temp_channels[user_id] = temp_channel
             self.introduction_responses[user_id] = {}
 
-            await interaction.followup.send(
+            await ctx.send(
                 f"I've created a private channel for your introduction: {temp_channel.mention}. "
                 "Please go there to answer the questions. You can type 'quit' or 'restart' at any time.",
                 ephemeral=True
@@ -169,11 +155,13 @@ class IntroductionsCog(commands.Cog):
             await temp_channel.send(f"Hello {user.mention}! Please answer the following questions to introduce yourself.")
 
         except discord.Forbidden:
-            await interaction.followup.send("I don't have permissions to create channels. Please check my role permissions.", ephemeral=True)
+            logging.error(f"Bot lacks permissions to create channels in guild {guild.id}.")
+            await ctx.send("I don't have permissions to create channels. Please check my role permissions.", ephemeral=True)
             await self.cleanup_introduction(user_id)
             return
         except Exception as e:
-            await interaction.followup.send(f"An error occurred while creating the channel: {e}", ephemeral=True)
+            logging.error(f"Error creating intro channel for user {user_id}", exc_info=e)
+            await ctx.send(f"An error occurred while creating the channel: {e}", ephemeral=True)
             await self.cleanup_introduction(user_id)
             return
 
@@ -215,7 +203,9 @@ class IntroductionsCog(commands.Cog):
                 elif response_text == 'restart':
                     await temp_channel.send("Restarting introduction process...")
                     await self.cleanup_introduction(user_id)
-                    await self.introductions_slash(interaction)
+                    # Re-invoking the command correctly
+                    new_ctx = await self.bot.get_context(ctx.message) if ctx.message else ctx
+                    await self.introductions_slash(new_ctx)
                     return
 
                 self.introduction_responses[user_id][question] = message.content
@@ -226,7 +216,7 @@ class IntroductionsCog(commands.Cog):
             except asyncio.CancelledError:
                 return
 
-        # --- Timezone Question (Multi-Level Dropdowns) ---
+        # --- Timezone Question ---
         await temp_channel.send("Please select your timezone:")
         view = MultiSelectView(user_id)
         await temp_channel.send("First, choose a region:", view=view)
@@ -248,7 +238,7 @@ class IntroductionsCog(commands.Cog):
                 self.temp_channel_timeouts[user_id].cancel()
                 del self.temp_channel_timeouts[user_id]
 
-    # --- Compile and Post Introduction (CLEANER LOOK) ---
+        # --- Compile and Post Introduction ---
         embed = discord.Embed(
             title=f"New Introduction from {user.display_name}",
             color=discord.Color.blue()
@@ -263,20 +253,19 @@ class IntroductionsCog(commands.Cog):
         target_channel = self.bot.get_channel(INTRO_CHANNEL_ID)
         if target_channel:
             try:
-                await target_channel.send(embed=embed) # Send the embed instead of the string
+                await target_channel.send(embed=embed)
                 await temp_channel.send("Your introduction has been posted to the introductions channel!")
             except discord.Forbidden:
                 await temp_channel.send(f"Error: I don't have permissions to post in the designated introduction channel ({target_channel.mention}). Please check my permissions in that channel.", ephemeral=False)
-                print(f"Error: Bot lacks permissions to post in channel ID {INTRO_CHANNEL_ID}")
+                logging.error(f"Bot lacks permissions to post in channel ID {INTRO_CHANNEL_ID}")
             except Exception as e:
                 await temp_channel.send(f"An unexpected error occurred while posting your introduction: {e}", ephemeral=False)
-                print(f"Error posting introduction for {user.id}: {e}")
+                logging.error(f"Error posting introduction for {user.id}", exc_info=e)
         else:
             await temp_channel.send("Error: Could not find the introduction channel. Please contact an admin to ensure `INTRO_CHANNEL_ID` is correct.", ephemeral=False)
+            logging.error(f"Could not find the introduction channel with ID {INTRO_CHANNEL_ID}.")
 
         await self.cleanup_introduction(user_id)
 
-# --- This is the new, required setup function ---
-# It takes the bot instance and adds your cog to it.
 async def setup(bot):
     await bot.add_cog(IntroductionsCog(bot))
