@@ -122,6 +122,7 @@ class TrainScheduleCog(commands.Cog):
             start = event['start'].get('dateTime', event['start'].get('date'))
             summary = event.get('summary', 'No Title')
             location = event.get('location', 'No Location')
+            description = event.get('description')
             
             if 'T' in start:
                 start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
@@ -137,6 +138,8 @@ class TrainScheduleCog(commands.Cog):
                 f"**From:** {location}\n"
                 f"**Link:** {event.get('htmlLink', 'N/A')}"
             )
+            if description:
+                field_value += f"\n**Notes:** {description}"
             embed.add_field(name=field_name, value=field_value, inline=False)
             
         try:
@@ -200,6 +203,7 @@ class TrainScheduleCog(commands.Cog):
                 for event in events:
                     summary = event.get('summary', 'No Title')
                     start = event['start'].get('dateTime', event['start'].get('date'))
+                    description = event.get('description')
 
                     if 'T' in start:
                         start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
@@ -212,6 +216,8 @@ class TrainScheduleCog(commands.Cog):
                     field_value = f"**Departure:** {start_formatted}"
                     if 'location' in event:
                         field_value += f"\n**From:** {event['location']}"
+                    if description:
+                        field_value += f"\n**Notes:** {description}"
                     if 'htmlLink' in event:
                         field_value += f"\n[View on Google Calendar]({event['htmlLink']})"
 
@@ -251,6 +257,7 @@ class TrainScheduleCog(commands.Cog):
             for event in events:
                 summary = event.get('summary', 'No Title')
                 start = event['start'].get('dateTime', event['start'].get('date'))
+                description = event.get('description')
 
                 if 'T' in start:
                     start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
@@ -263,6 +270,8 @@ class TrainScheduleCog(commands.Cog):
                 field_value = f"**Departure:** {start_formatted}"
                 if 'location' in event:
                     field_value += f"\n**From:** {event['location']}"
+                if description:
+                    field_value += f"\n**Notes:** {description}"
                 if 'htmlLink' in event:
                     field_value += f"\n[View on Google Calendar]({event['htmlLink']})"
 

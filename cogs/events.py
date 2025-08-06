@@ -40,7 +40,7 @@ class EventsCog(commands.Cog):
         # Ensure the bot is connected before starting the task
         await self.bot.wait_until_ready()
         self.post_upcoming_events.start()
-        logging.info("Scheduled calendar task started.")
+        logging.info("Scheduled events task started.")
 
     def cog_unload(self):
         """Cancel the background task when the cog is unloaded."""
@@ -125,6 +125,7 @@ class EventsCog(commands.Cog):
             start = event['start'].get('dateTime', event['start'].get('date'))
             summary = event.get('summary', 'No Title')
             location = event.get('location', 'No Location')
+            description = event.get('description')
             
             if 'T' in start:
                 start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
@@ -142,6 +143,8 @@ class EventsCog(commands.Cog):
                 f"**Location:** {location}\n"
                 f"**Link:** {event.get('htmlLink', 'N/A')}"
             )
+            if description:
+                field_value += f"\n**Notes:** {description}"
             embed.add_field(name=field_name, value=field_value, inline=False)
             
         strikethrough_events = [
@@ -220,6 +223,7 @@ class EventsCog(commands.Cog):
                 for event in events:
                     summary = event.get('summary', 'No Title')
                     start = event['start'].get('dateTime', event['start'].get('date'))
+                    description = event.get('description')
 
                     if 'T' in start:
                         start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
@@ -232,6 +236,8 @@ class EventsCog(commands.Cog):
                     field_value = f"**When:** {start_formatted}"
                     if 'location' in event:
                         field_value += f"\n**Where:** {event['location']}"
+                    if description:
+                        field_value += f"\n**Notes:** {description}"
                     if 'htmlLink' in event:
                         field_value += f"\n[View on Google Calendar]({event['htmlLink']})"
 
@@ -271,6 +277,7 @@ class EventsCog(commands.Cog):
             for event in events:
                 summary = event.get('summary', 'No Title')
                 start = event['start'].get('dateTime', event['start'].get('date'))
+                description = event.get('description')
 
                 if 'T' in start:
                     start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
@@ -283,6 +290,8 @@ class EventsCog(commands.Cog):
                 field_value = f"**When:** {start_formatted}"
                 if 'location' in event:
                     field_value += f"\n**Where:** {event['location']}"
+                if description:
+                    field_value += f"\n**Notes:** {description}"
                 if 'htmlLink' in event:
                     field_value += f"\n[View on Google Calendar]({event['htmlLink']})"
 
