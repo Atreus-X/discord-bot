@@ -146,7 +146,7 @@ class TrainScheduleCog(commands.Cog):
 
             # --- MODIFIED: "From" field removed ---
             message_parts = [
-                f"**TRAIN DEPARTING NOW: {summary}**",
+                f"**UPCOMING TRAIN DEPARTURE: {summary}**",
                 "---------------------------------",
                 f"**Departure Time:** {start_formatted}",
                 f"**Link:** <{event.get('htmlLink', 'N/A')}>"
