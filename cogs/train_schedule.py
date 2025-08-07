@@ -12,26 +12,21 @@ from googleapiclient.discovery import build
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
-PREVIOUS_TRAIN_EVENTS_FILE = 'previous_train_events.json'
+ANNOUNCED_TRAIN_EVENTS_FILE = 'announced_train_events.json'
 
 # --- Timezone Setup ---
 TARGET_TIMEZONE = datetime.timezone(datetime.timedelta(hours=-2))
-scheduled_times = [
-    datetime.time(13, 0, tzinfo=TARGET_TIMEZONE),
-    datetime.time(1, 0, tzinfo=TARGET_TIMEZONE)
-]
 
 class TrainScheduleCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.post_upcoming_trains.start()
+        self.check_for_upcoming_trains.start()
         self.creds = None
         self.calendar_id = os.environ.get('TRAIN_CALENDAR_ID')
         
-        # --- MODIFIED: Read multiple channel IDs from environment variables ---
         self.events_channel_ids = []
         channel_id_1 = os.environ.get('TRAIN_EVENTS_CHANNEL_ID')
-        channel_id_2 = os.environ.get('TRAIN_EVENTS_CHANNEL_ID_2') # New environment variable for the second channel
+        channel_id_2 = os.environ.get('TRAIN_EVENTS_CHANNEL_ID_2')
 
         if channel_id_1:
             try:
@@ -44,21 +39,23 @@ class TrainScheduleCog(commands.Cog):
                 self.events_channel_ids.append(int(channel_id_2))
             except ValueError:
                 logging.error(f"Invalid TRAIN_EVENTS_CHANNEL_ID_2: {channel_id_2}. Must be an integer.")
-        # --- END MODIFICATION ---
+        
+        self.announced_event_ids = self.load_announced_events()
 
-        self.previous_events = self.load_previous_events()
+    def load_announced_events(self):
+        """Loads announced event IDs from a local JSON file."""
+        if os.path.exists(ANNOUNCED_TRAIN_EVENTS_FILE):
+            try:
+                with open(ANNOUNCED_TRAIN_EVENTS_FILE, 'r') as f:
+                    return set(json.load(f))
+            except json.JSONDecodeError:
+                return set()
+        return set()
 
-    def load_previous_events(self):
-        """Loads event IDs from a local JSON file."""
-        if os.path.exists(PREVIOUS_TRAIN_EVENTS_FILE):
-            with open(PREVIOUS_TRAIN_EVENTS_FILE, 'r') as f:
-                return json.load(f)
-        return {}
-
-    def save_previous_events(self, event_ids):
-        """Saves current event IDs to a local JSON file."""
-        with open(PREVIOUS_TRAIN_EVENTS_FILE, 'w') as f:
-            json.dump(event_ids, f)
+    def save_announced_events(self):
+        """Saves current announced event IDs to a local JSON file."""
+        with open(ANNOUNCED_TRAIN_EVENTS_FILE, 'w') as f:
+            json.dump(list(self.announced_event_ids), f)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -68,16 +65,11 @@ class TrainScheduleCog(commands.Cog):
 
     def cog_unload(self):
         """Cancel the background task when the cog is unloaded."""
-        self.post_upcoming_trains.cancel()
+        self.check_for_upcoming_trains.cancel()
     
     async def get_calendar_service(self):
-        """
-        Authenticates with the Google Calendar API using a service account.
-        """
         from google.oauth2 import service_account
-
-        SERVICE_ACCOUNT_FILE = 'private/service_account.json' 
-
+        SERVICE_ACCOUNT_FILE = 'private/service_account.json'
         creds = None
         if os.path.exists(SERVICE_ACCOUNT_FILE):
             creds = service_account.Credentials.from_service_account_file(
@@ -86,140 +78,113 @@ class TrainScheduleCog(commands.Cog):
             logging.error(f"Service account key file not found at {SERVICE_ACCOUNT_FILE}")
             if os.path.exists('token.json'):
                 self.creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-            
             if not self.creds or not self.creds.valid:
                 if self.creds and self.creds.expired and self.creds.refresh_token:
                     self.creds.refresh(Request())
                 else:
                     flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
                     self.creds = flow.run_local_server(port=0)
-                
                 with open('token.json', 'w') as token:
                     token.write(self.creds.to_json())
             creds = self.creds
-
         service = build('calendar', 'v3', credentials=creds)
         return service
     
-    async def get_train_events(self, max_results=5, time_max=None):
+    async def get_train_events(self, time_min, time_max):
         """Fetches upcoming train events from Google Calendar."""
         if not self.calendar_id:
             logging.error("TRAIN_CALENDAR_ID environment variable is not set.")
             return []
-
         try:
             service = await self.get_calendar_service()
-            if not service:
-                return []
-            
-            now = datetime.datetime.utcnow().isoformat() + 'Z'
+            if not service: return []
             
             events_result = await asyncio.to_thread(
                 service.events().list(
                     calendarId=self.calendar_id,
-                    timeMin=now,
-                    maxResults=max_results,
+                    timeMin=time_min,
                     timeMax=time_max,
                     singleEvents=True,
                     orderBy='startTime'
                 ).execute
             )
-            
             return events_result.get('items', [])
-        
         except Exception as e:
             logging.error(f"Train Calendar API error", exc_info=True)
             return []
-    
-    async def update_train_events_post(self, channel: discord.TextChannel, embed: discord.Embed):
-        """Sends a pre-made embed to a specific channel and handles message cleanup."""
-        try:
-            async for message in channel.history(limit=10):
-                if message.author == self.bot.user and message.embeds and "Train Departures" in message.embeds[0].title:
-                    await message.delete()
-                    break
-        except discord.Forbidden:
-            logging.warning(f"Bot lacks permission to delete messages in channel {channel.id}.")
-        except Exception as e:
-            logging.error(f"Error deleting old train schedule message in channel {channel.id}", exc_info=True)
 
-        await channel.send(embed=embed)
-    
-    @tasks.loop(time=scheduled_times)
-    async def post_upcoming_trains(self):
-        """A background task to post upcoming train schedules."""
+    @tasks.loop(minutes=1)
+    async def check_for_upcoming_trains(self):
+        """Checks for trains departing in the current minute and posts them."""
         if not self.events_channel_ids:
-            logging.error("No train event channel IDs are set. Please check your environment variables.")
+            if not hasattr(self, '_logged_no_channel_ids'):
+                logging.error("No train event channel IDs are set. Please check your environment variables.")
+                self._logged_no_channel_ids = True
             return
-            
-        # --- MODIFIED: Create the embed once ---
-        current_events = await self.get_train_events()
-        embed = discord.Embed(
-            title="Upcoming Train Departures",
-            description="Here are the next 5 train departures:",
-            color=discord.Color.dark_gold()
+
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        time_max_utc = now_utc + datetime.timedelta(minutes=1)
+
+        events_to_announce = await self.get_train_events(
+            time_min=now_utc.isoformat(),
+            time_max=time_max_utc.isoformat()
         )
-        
-        for event in current_events:
-            start = event['start'].get('dateTime', event['start'].get('date'))
-            summary = event.get('summary', 'No Title')
-            location = event.get('location', 'No Location')
-            description = event.get('description')
-            
-            if 'T' in start:
-                start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
-                start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
-                start_formatted = start_dt_target.strftime('%A, %b %d at %I:%M %p') + " (UTC-2)"
-            else:
-                start_dt = datetime.datetime.strptime(start, '%Y-%m-%d').date()
-                start_formatted = f"{start_dt.strftime('%A, %b %d')} (All-day)"
 
-            field_name = f"🚂 {summary}"
-            field_value = (
-                f"**Departure:** {start_formatted}\n"
-                f"**From:** {location}\n"
-                f"**Link:** {event.get('htmlLink', 'N/A')}"
-            )
-            if description:
-                field_value += f"\n**Notes:** {description}"
-            embed.add_field(name=field_name, value=field_value, inline=False)
-        # --- END MODIFICATION ---
-
-        # --- MODIFIED: Loop through channel IDs and post ---
-        for channel_id in self.events_channel_ids:
-            channel = self.bot.get_channel(channel_id)
-            if not channel:
-                logging.error(f"Could not find train schedule channel with ID {channel_id}.")
+        for event in events_to_announce:
+            event_id = event['id']
+            if event_id in self.announced_event_ids:
                 continue
-            
-            await self.update_train_events_post(channel, embed)
-        # --- END MODIFICATION ---
 
+            summary = event.get('summary', 'No Title')
+            description = event.get('description')
+            start = event['start'].get('dateTime', event['start'].get('date'))
+
+            start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
+            start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
+            # --- MODIFIED: Use %H:%M for 24-hour format ---
+            start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " (UTC-2)"
+
+            # --- MODIFIED: "From" field removed ---
+            message_parts = [
+                f"**TRAIN DEPARTING NOW: {summary}**",
+                "---------------------------------",
+                f"**Departure Time:** {start_formatted}",
+                f"**Link:** <{event.get('htmlLink', 'N/A')}>"
+            ]
+            if description:
+                message_parts.append(f"**Notes:** {description}")
+            
+            final_message = "\n".join(message_parts)
+
+            for channel_id in self.events_channel_ids:
+                channel = self.bot.get_channel(channel_id)
+                if channel:
+                    await channel.send(final_message)
+                else:
+                    logging.error(f"Could not find train schedule channel with ID {channel_id}.")
+            
+            self.announced_event_ids.add(event_id)
+
+        self.save_announced_events()
+    
     @commands.hybrid_command(name="manual_train_trigger", description="Posts train departures in the next 24 hours.")
     @commands.has_permissions(administrator=True)
     async def manual_train_trigger(self, ctx: commands.Context):
         """A manual command to trigger a train schedule post for the next 24 hours."""
         await ctx.defer(ephemeral=True)
-        
         if not self.events_channel_ids:
-            await ctx.send(
-                f"Error: No announcement channels are configured. Please contact an admin.",
-                ephemeral=True
-            )
+            await ctx.send(f"Error: No announcement channels are configured.", ephemeral=True)
             return
 
         try:
             now = datetime.datetime.utcnow()
             time_max_dt = now + datetime.timedelta(days=1)
             time_max_iso = time_max_dt.isoformat() + "Z"
-            events = await self.get_train_events(max_results=100, time_max=time_max_iso)
-            embed = discord.Embed(
-                title="Train Departures for the Next 24 Hours",
-                color=discord.Color.dark_gold()
-            )
+            events = await self.get_train_events(time_min=now.isoformat(), time_max=time_max_iso)
             
+            message_parts = ["**Train Departures for the Next 24 Hours**", "---------------------------------"]
             if not events:
-                embed.description = "No upcoming train departures found in the next 24 hours."
+                message_parts.append("No upcoming train departures found in the next 24 hours.")
             else:
                 for event in events:
                     summary = event.get('summary', 'No Title')
@@ -228,97 +193,81 @@ class TrainScheduleCog(commands.Cog):
                     if 'T' in start:
                         start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
                         start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
-                        start_formatted = start_dt_target.strftime('%A, %b %d at %I:%M %p') + " (UTC-2)"
+                        # --- MODIFIED: Use %H:%M for 24-hour format ---
+                        start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " (UTC-2)"
                     else:
                         start_dt = datetime.datetime.strptime(start, '%Y-%m-%d').date()
                         start_formatted = f"{start_dt.strftime('%A, %b %d')} (All-day)"
-                    field_value = f"**Departure:** {start_formatted}"
-                    if 'location' in event:
-                        field_value += f"\n**From:** {event['location']}"
-                    if description:
-                        field_value += f"\n**Notes:** {description}"
-                    if 'htmlLink' in event:
-                        field_value += f"\n[View on Google Calendar]({event['htmlLink']})"
-                    embed.add_field(name=f"🚂 {summary}", value=field_value, inline=False)
+                    
+                    # --- MODIFIED: "From" field removed ---
+                    event_details = [f"🚂 **{summary}**", f"**Departure:** {start_formatted}"]
+                    if description: event_details.append(f"**Notes:** {description}")
+                    if 'htmlLink' in event: event_details.append(f"[View on Google Calendar](<{event['htmlLink']}>)")
+                    message_parts.append("\n".join(event_details))
             
-            # --- MODIFIED: Loop through channels and send ---
+            final_message = "\n\n".join(message_parts)
+            
             posted_channels = []
             for channel_id in self.events_channel_ids:
                 channel = self.bot.get_channel(channel_id)
                 if channel:
-                    await channel.send(embed=embed)
+                    await channel.send(final_message)
                     posted_channels.append(channel.mention)
-
             if posted_channels:
                 await ctx.send(f"Posted train departures for the next 24 hours to {', '.join(posted_channels)}.", ephemeral=True)
             else:
                 await ctx.send("Error: Could not find any of the configured channels.", ephemeral=True)
-            # --- END MODIFICATION ---
-
         except Exception as e:
             logging.error(f"Error in manual_train_trigger command for user {ctx.author.id}", exc_info=True)
             await ctx.send("An error occurred while fetching the train schedule.", ephemeral=True)
-
 
     @commands.hybrid_command(name="upcoming_trains", description="Shows upcoming train departures for the next 3 days privately.")
     async def upcoming_trains(self, ctx: commands.Context):
         """A slash command to get train departures for the next 3 days privately."""
         await ctx.defer(ephemeral=True)
-
         try:
             now = datetime.datetime.utcnow()
             time_max_dt = now + datetime.timedelta(days=3)
             time_max_iso = time_max_dt.isoformat() + "Z"
-
-            events = await self.get_train_events(max_results=25, time_max=time_max_iso)
+            events = await self.get_train_events(time_min=now.isoformat(), time_max=time_max_iso)
 
             if not events:
                 await ctx.send("You have no upcoming train departures in the next 3 days.", ephemeral=True)
                 return
 
-            embed = discord.Embed(
-                title="Your Train Schedule for the Next 3 Days",
-                color=discord.Color.dark_blue()
-            )
-
+            message_parts = ["**Your Train Schedule for the Next 3 Days**", "------------------------------------------"]
             for event in events:
                 summary = event.get('summary', 'No Title')
                 start = event['start'].get('dateTime', event['start'].get('date'))
                 description = event.get('description')
-
                 if 'T' in start:
                     start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
                     start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
-                    start_formatted = start_dt_target.strftime('%A, %b %d at %I:%M %p') + " (UTC-2)"
+                    # --- MODIFIED: Use %H:%M for 24-hour format ---
+                    start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " (UTC-2)"
                 else:
                     start_dt = datetime.datetime.strptime(start, '%Y-%m-%d').date()
                     start_formatted = f"{start_dt.strftime('%A, %b %d')} (All-day)"
+                
+                # --- MODIFIED: "From" field removed ---
+                event_details = [f"🚂 **{summary}**", f"**Departure:** {start_formatted}"]
+                if description: event_details.append(f"**Notes:** {description}")
+                if 'htmlLink' in event: event_details.append(f"[View on Google Calendar](<{event['htmlLink']}>)")
+                message_parts.append("\n".join(event_details))
 
-                field_value = f"**Departure:** {start_formatted}"
-                if 'location' in event:
-                    field_value += f"\n**From:** {event['location']}"
-                if description:
-                    field_value += f"\n**Notes:** {description}"
-                if 'htmlLink' in event:
-                    field_value += f"\n[View on Google Calendar]({event['htmlLink']})"
-
-                embed.add_field(name=f"🚂 {summary}", value=field_value, inline=False)
-
-            embed.set_footer(text=f"Requested by {ctx.author.display_name}")
+            final_message = "\n\n".join(message_parts)
             
             if not ctx.interaction:
                 try:
-                    await ctx.author.send(embed=embed)
+                    await ctx.author.send(final_message)
                     await ctx.send("I've sent your train schedule to your DMs.", delete_after=10)
                 except discord.Forbidden:
                     await ctx.send("I couldn't send you a DM. Please check your privacy settings.")
             else:
-                 await ctx.send(embed=embed, ephemeral=True)
-
+                 await ctx.send(final_message, ephemeral=True)
         except Exception as e:
             logging.error(f"Error in upcoming_trains command for user {ctx.author.id}", exc_info=True)
             await ctx.send("An error occurred while fetching your train schedule.", ephemeral=True)
-
 
 async def setup(bot):
     await bot.add_cog(TrainScheduleCog(bot))
