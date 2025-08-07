@@ -109,7 +109,8 @@ class EventsCog(commands.Cog):
                 with open('token.json', 'w') as token:
                     token.write(self.creds.to_json())
             creds = self.creds
-        service = build('calendar', 'v3', credentials=creds)
+        # --- MODIFIED: Added cache_discovery=False to the build function ---
+        service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
         return service
 
     async def get_events(self, time_min, time_max):
