@@ -14,11 +14,8 @@ from googleapiclient.discovery import build
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 PREVIOUS_TRAIN_EVENTS_FILE = 'previous_train_events.json'
 
-# --- Corrected Code: Define your target timezone ---
-# It's good practice to define this once at the top.
+# --- Timezone Setup ---
 TARGET_TIMEZONE = datetime.timezone(datetime.timedelta(hours=-2))
-
-# --- Corrected Code: Create timezone-aware time objects for the loop ---
 scheduled_times = [
     datetime.time(13, 0, tzinfo=TARGET_TIMEZONE),
     datetime.time(1, 0, tzinfo=TARGET_TIMEZONE)
@@ -27,11 +24,28 @@ scheduled_times = [
 class TrainScheduleCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # --- Corrected Code: Start the task with the corrected loop ---
         self.post_upcoming_trains.start()
         self.creds = None
         self.calendar_id = os.environ.get('TRAIN_CALENDAR_ID')
-        self.events_channel_id = int(os.environ.get('TRAIN_EVENTS_CHANNEL_ID', '0'))
+        
+        # --- MODIFIED: Read multiple channel IDs from environment variables ---
+        self.events_channel_ids = []
+        channel_id_1 = os.environ.get('TRAIN_EVENTS_CHANNEL_ID')
+        channel_id_2 = os.environ.get('TRAIN_EVENTS_CHANNEL_ID_2') # New environment variable for the second channel
+
+        if channel_id_1:
+            try:
+                self.events_channel_ids.append(int(channel_id_1))
+            except ValueError:
+                logging.error(f"Invalid TRAIN_EVENTS_CHANNEL_ID: {channel_id_1}. Must be an integer.")
+
+        if channel_id_2:
+            try:
+                self.events_channel_ids.append(int(channel_id_2))
+            except ValueError:
+                logging.error(f"Invalid TRAIN_EVENTS_CHANNEL_ID_2: {channel_id_2}. Must be an integer.")
+        # --- END MODIFICATION ---
+
         self.previous_events = self.load_previous_events()
 
     def load_previous_events(self):
@@ -117,10 +131,29 @@ class TrainScheduleCog(commands.Cog):
             logging.error(f"Train Calendar API error", exc_info=True)
             return []
     
-    async def update_train_events_post(self, channel: discord.TextChannel):
-        """Fetches train events and updates the post."""
-        current_events = await self.get_train_events()
+    async def update_train_events_post(self, channel: discord.TextChannel, embed: discord.Embed):
+        """Sends a pre-made embed to a specific channel and handles message cleanup."""
+        try:
+            async for message in channel.history(limit=10):
+                if message.author == self.bot.user and message.embeds and "Train Departures" in message.embeds[0].title:
+                    await message.delete()
+                    break
+        except discord.Forbidden:
+            logging.warning(f"Bot lacks permission to delete messages in channel {channel.id}.")
+        except Exception as e:
+            logging.error(f"Error deleting old train schedule message in channel {channel.id}", exc_info=True)
 
+        await channel.send(embed=embed)
+    
+    @tasks.loop(time=scheduled_times)
+    async def post_upcoming_trains(self):
+        """A background task to post upcoming train schedules."""
+        if not self.events_channel_ids:
+            logging.error("No train event channel IDs are set. Please check your environment variables.")
+            return
+            
+        # --- MODIFIED: Create the embed once ---
+        current_events = await self.get_train_events()
         embed = discord.Embed(
             title="Upcoming Train Departures",
             description="Here are the next 5 train departures:",
@@ -150,32 +183,17 @@ class TrainScheduleCog(commands.Cog):
             if description:
                 field_value += f"\n**Notes:** {description}"
             embed.add_field(name=field_name, value=field_value, inline=False)
+        # --- END MODIFICATION ---
+
+        # --- MODIFIED: Loop through channel IDs and post ---
+        for channel_id in self.events_channel_ids:
+            channel = self.bot.get_channel(channel_id)
+            if not channel:
+                logging.error(f"Could not find train schedule channel with ID {channel_id}.")
+                continue
             
-        try:
-            async for message in channel.history(limit=10):
-                if message.author == self.bot.user and message.embeds and "Train Departures" in message.embeds[0].title:
-                    await message.delete()
-                    break
-        except discord.Forbidden:
-            logging.warning(f"Bot lacks permission to delete messages in channel {channel.id}.")
-        except Exception as e:
-            logging.error(f"Error deleting old train schedule message in channel {channel.id}", exc_info=True)
-
-        await channel.send(embed=embed)
-    
-    @tasks.loop(time=scheduled_times)
-    async def post_upcoming_trains(self):
-        """A background task to post upcoming train schedules."""
-        if self.events_channel_id == 0:
-            logging.error("TRAIN_EVENTS_CHANNEL_ID environment variable is not set or is invalid.")
-            return
-
-        channel = self.bot.get_channel(self.events_channel_id)
-        if not channel:
-            logging.error(f"Could not find train schedule channel with ID {self.events_channel_id}.")
-            return
-        
-        await self.update_train_events_post(channel)
+            await self.update_train_events_post(channel, embed)
+        # --- END MODIFICATION ---
 
     @commands.hybrid_command(name="manual_train_trigger", description="Posts train departures in the next 24 hours.")
     @commands.has_permissions(administrator=True)
@@ -183,11 +201,9 @@ class TrainScheduleCog(commands.Cog):
         """A manual command to trigger a train schedule post for the next 24 hours."""
         await ctx.defer(ephemeral=True)
         
-        channel = self.bot.get_channel(self.events_channel_id)
-        
-        if not channel:
+        if not self.events_channel_ids:
             await ctx.send(
-                f"Error: Could not find channel with ID `{self.events_channel_id}`. Please contact an admin.",
+                f"Error: No announcement channels are configured. Please contact an admin.",
                 ephemeral=True
             )
             return
@@ -196,9 +212,7 @@ class TrainScheduleCog(commands.Cog):
             now = datetime.datetime.utcnow()
             time_max_dt = now + datetime.timedelta(days=1)
             time_max_iso = time_max_dt.isoformat() + "Z"
-
             events = await self.get_train_events(max_results=100, time_max=time_max_iso)
-
             embed = discord.Embed(
                 title="Train Departures for the Next 24 Hours",
                 color=discord.Color.dark_gold()
@@ -211,7 +225,6 @@ class TrainScheduleCog(commands.Cog):
                     summary = event.get('summary', 'No Title')
                     start = event['start'].get('dateTime', event['start'].get('date'))
                     description = event.get('description')
-
                     if 'T' in start:
                         start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
                         start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
@@ -219,7 +232,6 @@ class TrainScheduleCog(commands.Cog):
                     else:
                         start_dt = datetime.datetime.strptime(start, '%Y-%m-%d').date()
                         start_formatted = f"{start_dt.strftime('%A, %b %d')} (All-day)"
-
                     field_value = f"**Departure:** {start_formatted}"
                     if 'location' in event:
                         field_value += f"\n**From:** {event['location']}"
@@ -227,11 +239,21 @@ class TrainScheduleCog(commands.Cog):
                         field_value += f"\n**Notes:** {description}"
                     if 'htmlLink' in event:
                         field_value += f"\n[View on Google Calendar]({event['htmlLink']})"
-
                     embed.add_field(name=f"🚂 {summary}", value=field_value, inline=False)
             
-            await channel.send(embed=embed)
-            await ctx.send(f"Posted train departures for the next 24 hours to {channel.mention}.", ephemeral=True)
+            # --- MODIFIED: Loop through channels and send ---
+            posted_channels = []
+            for channel_id in self.events_channel_ids:
+                channel = self.bot.get_channel(channel_id)
+                if channel:
+                    await channel.send(embed=embed)
+                    posted_channels.append(channel.mention)
+
+            if posted_channels:
+                await ctx.send(f"Posted train departures for the next 24 hours to {', '.join(posted_channels)}.", ephemeral=True)
+            else:
+                await ctx.send("Error: Could not find any of the configured channels.", ephemeral=True)
+            # --- END MODIFICATION ---
 
         except Exception as e:
             logging.error(f"Error in manual_train_trigger command for user {ctx.author.id}", exc_info=True)
