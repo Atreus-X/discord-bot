@@ -9,8 +9,9 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-# --- NEW: Import the Google Cloud Translate client ---
+# --- MODIFIED: Import service_account for explicit credential loading ---
 from google.cloud import translate_v2 as translate
+from google.oauth2 import service_account
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
@@ -22,13 +23,21 @@ TARGET_TIMEZONE = datetime.timezone(datetime.timedelta(hours=-2))
 class TrainScheduleCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.check_for_upcoming_trains.start()
         self.creds = None
         self.calendar_id = os.environ.get('TRAIN_CALENDAR_ID')
         self.translation_enabled = os.environ.get('TRANSLATE_TRAINS', 'False').lower() in ('true', '1', 't')
         
-        # --- MODIFIED: Set up translation client and language-specific channels ---
-        self.translate_client = translate.Client()
+        # --- MODIFIED: Explicitly load credentials for Translate client ---
+        SERVICE_ACCOUNT_FILE = 'private/service_account.json'
+        translate_creds = None
+        if os.path.exists(SERVICE_ACCOUNT_FILE):
+            try:
+                translate_creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE)
+            except Exception as e:
+                logging.error(f"Failed to load service account for translate client: {e}")
+
+        self.translate_client = translate.Client(credentials=translate_creds)
+        
         self.language_channels = {}
 
         # English channel
@@ -50,9 +59,11 @@ class TrainScheduleCog(commands.Cog):
         korean_channel_id = os.environ.get('TRAIN_EVENTS_CHANNEL_ID_KO')
         if korean_channel_id:
             self.language_channels['ko'] = int(korean_channel_id)
-        # --- END MODIFICATION ---
 
         self.announced_event_ids = self.load_announced_events()
+        
+        # --- MOVED: Start task after all attributes are initialized ---
+        self.check_for_upcoming_trains.start()
 
     def load_announced_events(self):
         """Loads announced event IDs from a local JSON file."""
@@ -80,7 +91,6 @@ class TrainScheduleCog(commands.Cog):
         self.check_for_upcoming_trains.cancel()
     
     async def get_calendar_service(self):
-        from google.oauth2 import service_account
         SERVICE_ACCOUNT_FILE = 'private/service_account.json'
         creds = None
         if os.path.exists(SERVICE_ACCOUNT_FILE):
@@ -125,7 +135,6 @@ class TrainScheduleCog(commands.Cog):
             logging.error(f"Train Calendar API error", exc_info=True)
             return []
 
-    # --- NEW: Translation function ---
     def translate_text(self, text, target_language):
         """Translates text to the target language."""
         if not text:
@@ -136,7 +145,6 @@ class TrainScheduleCog(commands.Cog):
         except Exception as e:
             logging.error(f"Error translating text to {target_language}", exc_info=True)
             return f"Error translating: {text}"
-    # --- END NEW ---
 
     @tasks.loop(minutes=1)
     async def check_for_upcoming_trains(self):
@@ -168,7 +176,6 @@ class TrainScheduleCog(commands.Cog):
             start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
             start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " (Server Time)"
 
-            # --- MODIFIED: Loop through each language and post a translated message ---
             for lang, channel_id in self.language_channels.items():
                 channel = self.bot.get_channel(channel_id)
                 if not channel:
@@ -201,7 +208,6 @@ class TrainScheduleCog(commands.Cog):
                 
                 final_message = "\n".join(message_parts)
                 await channel.send(final_message)
-            # --- END MODIFICATION ---
 
             self.announced_event_ids.add(event_id)
 
@@ -211,8 +217,6 @@ class TrainScheduleCog(commands.Cog):
     @commands.hybrid_command(name="manual_train_trigger", description="Posts train departures in the next 24 hours.")
     @commands.has_permissions(administrator=True)
     async def manual_train_trigger(self, ctx: commands.Context):
-        # This command is left in but will only post in English to the first configured channel
-        # for simplicity, as translating for a manual command is less critical.
         if not self.language_channels:
             await ctx.send(f"Error: No announcement channels are configured.", ephemeral=True)
             return
