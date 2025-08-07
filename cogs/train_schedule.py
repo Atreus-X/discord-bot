@@ -9,6 +9,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
+# --- NEW: Import the Google Cloud Translate client ---
+from google.cloud import translate_v2 as translate
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
@@ -24,22 +26,31 @@ class TrainScheduleCog(commands.Cog):
         self.creds = None
         self.calendar_id = os.environ.get('TRAIN_CALENDAR_ID')
         
-        self.events_channel_ids = []
-        channel_id_1 = os.environ.get('TRAIN_EVENTS_CHANNEL_ID')
-        channel_id_2 = os.environ.get('TRAIN_EVENTS_CHANNEL_ID_2')
+        # --- MODIFIED: Set up translation client and language-specific channels ---
+        self.translate_client = translate.Client()
+        self.language_channels = {}
 
-        if channel_id_1:
-            try:
-                self.events_channel_ids.append(int(channel_id_1))
-            except ValueError:
-                logging.error(f"Invalid TRAIN_EVENTS_CHANNEL_ID: {channel_id_1}. Must be an integer.")
+        # English channel
+        english_channel_id = os.environ.get('TRAIN_EVENTS_CHANNEL_ID_EN')
+        if english_channel_id:
+            self.language_channels['en'] = int(english_channel_id)
+            
+        # Chinese (Traditional) channel
+        chinese_channel_id = os.environ.get('TRAIN_EVENTS_CHANNEL_ID_ZH_TW')
+        if chinese_channel_id:
+            self.language_channels['zh-TW'] = int(chinese_channel_id)
 
-        if channel_id_2:
-            try:
-                self.events_channel_ids.append(int(channel_id_2))
-            except ValueError:
-                logging.error(f"Invalid TRAIN_EVENTS_CHANNEL_ID_2: {channel_id_2}. Must be an integer.")
-        
+        # Spanish channel
+        spanish_channel_id = os.environ.get('TRAIN_EVENTS_CHANNEL_ID_ES')
+        if spanish_channel_id:
+            self.language_channels['es'] = int(spanish_channel_id)
+
+        # Korean channel
+        korean_channel_id = os.environ.get('TRAIN_EVENTS_CHANNEL_ID_KO')
+        if korean_channel_id:
+            self.language_channels['ko'] = int(korean_channel_id)
+        # --- END MODIFICATION ---
+
         self.announced_event_ids = self.load_announced_events()
 
     def load_announced_events(self):
@@ -113,13 +124,26 @@ class TrainScheduleCog(commands.Cog):
             logging.error(f"Train Calendar API error", exc_info=True)
             return []
 
+    # --- NEW: Translation function ---
+    def translate_text(self, text, target_language):
+        """Translates text to the target language."""
+        if not text:
+            return ""
+        try:
+            result = self.translate_client.translate(text, target_language=target_language)
+            return result['translatedText']
+        except Exception as e:
+            logging.error(f"Error translating text to {target_language}", exc_info=True)
+            return f"Error translating: {text}"
+    # --- END NEW ---
+
     @tasks.loop(minutes=1)
     async def check_for_upcoming_trains(self):
         """Checks for trains departing in the current minute and posts them."""
-        if not self.events_channel_ids:
-            if not hasattr(self, '_logged_no_channel_ids'):
+        if not self.language_channels:
+            if not hasattr(self, '_logged_no_channels'):
                 logging.error("No train event channel IDs are set. Please check your environment variables.")
-                self._logged_no_channel_ids = True
+                self._logged_no_channels = True
             return
 
         now_utc = datetime.datetime.now(datetime.timezone.utc)
@@ -138,42 +162,63 @@ class TrainScheduleCog(commands.Cog):
             summary = event.get('summary', 'No Title')
             description = event.get('description')
             start = event['start'].get('dateTime', event['start'].get('date'))
+            link = event.get('htmlLink', 'N/A')
 
             start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
             start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
-            # --- MODIFIED: Use %H:%M for 24-hour format ---
             start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " (Server Time)"
 
-            # --- MODIFIED: "From" field removed ---
-            message_parts = [
-                f"**UPCOMING TRAIN DEPARTURE: {summary}**",
-                "---------------------------------",
-                f"**Departure Time:** {start_formatted}",
-                f"**Link:** <{event.get('htmlLink', 'N/A')}>"
-            ]
-            if description:
-                message_parts.append(f"**Notes:** {description}")
-            
-            final_message = "\n".join(message_parts)
-
-            for channel_id in self.events_channel_ids:
+            # --- MODIFIED: Loop through each language and post a translated message ---
+            for lang, channel_id in self.language_channels.items():
                 channel = self.bot.get_channel(channel_id)
-                if channel:
-                    await channel.send(final_message)
+                if not channel:
+                    logging.error(f"Could not find channel with ID {channel_id} for language {lang}.")
+                    continue
+                
+                if lang == 'en':
+                    translated_summary = summary
+                    translated_description = description
+                    header = f"**TRAIN DEPARTING NOW: {translated_summary}**"
+                    notes_header = "**Notes:**"
+                    time_header = "**Departure Time:**"
                 else:
-                    logging.error(f"Could not find train schedule channel with ID {channel_id}.")
-            
+                    translated_summary = self.translate_text(summary, lang)
+                    translated_description = self.translate_text(description, lang)
+                    header = f"**{self.translate_text('TRAIN DEPARTING NOW:', lang)} {translated_summary}**"
+                    notes_header = f"**{self.translate_text('Notes:', lang)}**"
+                    time_header = f"**{self.translate_text('Departure Time:', lang)}**"
+                
+                message_parts = [
+                    header,
+                    "---------------------------------",
+                    f"{time_header} {start_formatted}",
+                    f"**Link:** <{link}>"
+                ]
+                if translated_description:
+                    message_parts.append(f"{notes_header} {translated_description}")
+                
+                final_message = "\n".join(message_parts)
+                await channel.send(final_message)
+            # --- END MODIFICATION ---
+
             self.announced_event_ids.add(event_id)
 
-        self.save_announced_events()
+        if events_to_announce:
+            self.save_announced_events()
     
     @commands.hybrid_command(name="manual_train_trigger", description="Posts train departures in the next 24 hours.")
     @commands.has_permissions(administrator=True)
     async def manual_train_trigger(self, ctx: commands.Context):
-        """A manual command to trigger a train schedule post for the next 24 hours."""
-        await ctx.defer(ephemeral=True)
-        if not self.events_channel_ids:
+        # This command is left in but will only post in English to the first configured channel
+        # for simplicity, as translating for a manual command is less critical.
+        if not self.language_channels:
             await ctx.send(f"Error: No announcement channels are configured.", ephemeral=True)
+            return
+
+        first_channel_id = next(iter(self.language_channels.values()))
+        channel = self.bot.get_channel(first_channel_id)
+        if not channel:
+            await ctx.send(f"Error: Could not find the primary announcement channel.", ephemeral=True)
             return
 
         try:
@@ -193,30 +238,20 @@ class TrainScheduleCog(commands.Cog):
                     if 'T' in start:
                         start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
                         start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
-                        # --- MODIFIED: Use %H:%M for 24-hour format ---
                         start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " (Server Time)"
                     else:
                         start_dt = datetime.datetime.strptime(start, '%Y-%m-%d').date()
                         start_formatted = f"{start_dt.strftime('%A, %b %d')} (All-day)"
                     
-                    # --- MODIFIED: "From" field removed ---
                     event_details = [f"🚂 **{summary}**", f"**Departure:** {start_formatted}"]
                     if description: event_details.append(f"**Notes:** {description}")
                     if 'htmlLink' in event: event_details.append(f"[View on Google Calendar](<{event['htmlLink']}>)")
                     message_parts.append("\n".join(event_details))
             
             final_message = "\n\n".join(message_parts)
-            
-            posted_channels = []
-            for channel_id in self.events_channel_ids:
-                channel = self.bot.get_channel(channel_id)
-                if channel:
-                    await channel.send(final_message)
-                    posted_channels.append(channel.mention)
-            if posted_channels:
-                await ctx.send(f"Posted train departures for the next 24 hours to {', '.join(posted_channels)}.", ephemeral=True)
-            else:
-                await ctx.send("Error: Could not find any of the configured channels.", ephemeral=True)
+            await channel.send(final_message)
+            await ctx.send(f"Posted train departures for the next 24 hours to {channel.mention}.", ephemeral=True)
+
         except Exception as e:
             logging.error(f"Error in manual_train_trigger command for user {ctx.author.id}", exc_info=True)
             await ctx.send("An error occurred while fetching the train schedule.", ephemeral=True)
@@ -243,13 +278,11 @@ class TrainScheduleCog(commands.Cog):
                 if 'T' in start:
                     start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
                     start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
-                    # --- MODIFIED: Use %H:%M for 24-hour format ---
                     start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " (Server Time)"
                 else:
                     start_dt = datetime.datetime.strptime(start, '%Y-%m-%d').date()
                     start_formatted = f"{start_dt.strftime('%A, %b %d')} (All-day)"
                 
-                # --- MODIFIED: "From" field removed ---
                 event_details = [f"🚂 **{summary}**", f"**Departure:** {start_formatted}"]
                 if description: event_details.append(f"**Notes:** {description}")
                 if 'htmlLink' in event: event_details.append(f"[View on Google Calendar](<{event['htmlLink']}>)")

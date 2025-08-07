@@ -9,6 +9,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
+# --- NEW: Import the Google Cloud Translate client ---
+from google.cloud import translate_v2 as translate
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
@@ -23,7 +25,32 @@ class EventsCog(commands.Cog):
         self.check_for_upcoming_events.start()
         self.creds = None
         self.calendar_id = os.environ.get('EVENTS_CALENDAR_ID')
-        self.events_channel_id = int(os.environ.get('EVENTS_CHANNEL_ID', '0'))
+        
+        # --- MODIFIED: Set up translation client and language-specific channels ---
+        self.translate_client = translate.Client()
+        self.language_channels = {}
+        
+        # Original English channel
+        english_channel_id = os.environ.get('EVENTS_CHANNEL_ID_EN')
+        if english_channel_id:
+            self.language_channels['en'] = int(english_channel_id)
+            
+        # Chinese (Traditional) channel
+        chinese_channel_id = os.environ.get('EVENTS_CHANNEL_ID_ZH_TW')
+        if chinese_channel_id:
+            self.language_channels['zh-TW'] = int(chinese_channel_id)
+
+        # Spanish channel
+        spanish_channel_id = os.environ.get('EVENTS_CHANNEL_ID_ES')
+        if spanish_channel_id:
+            self.language_channels['es'] = int(spanish_channel_id)
+
+        # Korean channel
+        korean_channel_id = os.environ.get('EVENTS_CHANNEL_ID_KO')
+        if korean_channel_id:
+            self.language_channels['ko'] = int(korean_channel_id)
+        # --- END MODIFICATION ---
+
         self.announced_event_ids = self.load_announced_events()
 
     def load_announced_events(self):
@@ -97,20 +124,26 @@ class EventsCog(commands.Cog):
             logging.error(f"Calendar API error", exc_info=True)
             return []
 
+    # --- NEW: Translation function ---
+    def translate_text(self, text, target_language):
+        """Translates text to the target language."""
+        if not text:
+            return ""
+        try:
+            result = self.translate_client.translate(text, target_language=target_language)
+            return result['translatedText']
+        except Exception as e:
+            logging.error(f"Error translating text to {target_language}", exc_info=True)
+            return f"Error translating: {text}" # Return original text on error
+    # --- END NEW ---
+
     @tasks.loop(minutes=1)
     async def check_for_upcoming_events(self):
         """Checks for events starting in the current minute and posts them."""
-        if self.events_channel_id == 0:
-            if not hasattr(self, '_logged_no_channel_id'):
-                logging.error("EVENTS_CHANNEL_ID environment variable is not set or is invalid.")
-                self._logged_no_channel_id = True 
-            return
-
-        channel = self.bot.get_channel(self.events_channel_id)
-        if not channel:
-            if not hasattr(self, '_logged_no_channel'):
-                logging.error(f"Could not find channel with ID {self.events_channel_id}.")
-                self._logged_no_channel = True
+        if not self.language_channels:
+            if not hasattr(self, '_logged_no_channels'):
+                logging.error("No event channel IDs are set. Please check your environment variables.")
+                self._logged_no_channels = True
             return
 
         now_utc = datetime.datetime.now(datetime.timezone.utc)
@@ -129,26 +162,51 @@ class EventsCog(commands.Cog):
             summary = event.get('summary', 'No Title')
             description = event.get('description')
             start = event['start'].get('dateTime', event['start'].get('date'))
+            link = event.get('htmlLink', 'N/A')
 
             start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
             start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
             start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " (Server Time)"
 
-            message_parts = [
-                f"**UPCOMING EVENT: {summary}**",
-                "---------------------------------",
-                f"**Time:** {start_formatted}",
-                f"**Link:** <{event.get('htmlLink', 'N/A')}>"
-            ]
-            if description:
-                message_parts.append(f"**Notes:** {description}")
-            
-            final_message = "\n".join(message_parts)
-            
-            await channel.send(final_message)
+            # --- MODIFIED: Loop through each language and post a translated message ---
+            for lang, channel_id in self.language_channels.items():
+                channel = self.bot.get_channel(channel_id)
+                if not channel:
+                    logging.error(f"Could not find channel with ID {channel_id} for language {lang}.")
+                    continue
+                
+                # Translate event details if not English
+                if lang == 'en':
+                    translated_summary = summary
+                    translated_description = description
+                    header = f"**EVENT STARTING NOW: {translated_summary}**"
+                    notes_header = "**Notes:**"
+                    time_header = "**Time:**"
+                else:
+                    translated_summary = self.translate_text(summary, lang)
+                    translated_description = self.translate_text(description, lang)
+                    header = f"**{self.translate_text('EVENT STARTING NOW:', lang)} {translated_summary}**"
+                    notes_header = f"**{self.translate_text('Notes:', lang)}**"
+                    time_header = f"**{self.translate_text('Time:', lang)}**"
+
+                message_parts = [
+                    header,
+                    "---------------------------------",
+                    f"{time_header} {start_formatted}",
+                    f"**Link:** <{link}>"
+                ]
+
+                if translated_description:
+                    message_parts.append(f"{notes_header} {translated_description}")
+                
+                final_message = "\n".join(message_parts)
+                await channel.send(final_message)
+            # --- END MODIFICATION ---
+
             self.announced_event_ids.add(event_id)
         
-        self.save_announced_events()
+        if events_to_announce:
+            self.save_announced_events()
 
     @commands.hybrid_command(name="upcoming_events", description="Shows your upcoming events for the next 3 days privately.")
     async def upcoming_events(self, ctx: commands.Context):
@@ -196,7 +254,6 @@ class EventsCog(commands.Cog):
         except Exception as e:
             logging.error(f"Error in upcoming_events command for user {ctx.author.id}", exc_info=True)
             await ctx.send("An error occurred while fetching your schedule. Please try again later.", ephemeral=True)
-
 
 async def setup(bot):
     await bot.add_cog(EventsCog(bot))
