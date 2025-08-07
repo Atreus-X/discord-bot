@@ -142,7 +142,7 @@ class TrainScheduleCog(commands.Cog):
             start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
             start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
             # --- MODIFIED: Use %H:%M for 24-hour format ---
-            start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " Server Time"
+            start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " (Server Time)"
 
             # --- MODIFIED: "From" field removed ---
             message_parts = [
@@ -194,7 +194,7 @@ class TrainScheduleCog(commands.Cog):
                         start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
                         start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
                         # --- MODIFIED: Use %H:%M for 24-hour format ---
-                        start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " Server Time"
+                        start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " (Server Time)"
                     else:
                         start_dt = datetime.datetime.strptime(start, '%Y-%m-%d').date()
                         start_formatted = f"{start_dt.strftime('%A, %b %d')} (All-day)"
@@ -244,7 +244,7 @@ class TrainScheduleCog(commands.Cog):
                     start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
                     start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
                     # --- MODIFIED: Use %H:%M for 24-hour format ---
-                    start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " Server Time"
+                    start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " (Server Time)"
                 else:
                     start_dt = datetime.datetime.strptime(start, '%Y-%m-%d').date()
                     start_formatted = f"{start_dt.strftime('%A, %b %d')} (All-day)"
