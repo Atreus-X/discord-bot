@@ -135,7 +135,7 @@ class EventsCog(commands.Cog):
             start_formatted = start_dt_target.strftime('%A, %b %d at %H:%M') + " (UTC-2)"
 
             message_parts = [
-                f"**EVENT STARTING NOW: {summary}**",
+                f"**UPCOMING EVENT: {summary}**",
                 "---------------------------------",
                 f"**Time:** {start_formatted}",
                 f"**Link:** <{event.get('htmlLink', 'N/A')}>"
