@@ -14,9 +14,21 @@ from googleapiclient.discovery import build
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 PREVIOUS_TRAIN_EVENTS_FILE = 'previous_train_events.json'
 
+# --- Corrected Code: Define your target timezone ---
+# It's good practice to define this once at the top.
+TARGET_TIMEZONE = datetime.timezone(datetime.timedelta(hours=-2))
+
+# --- Corrected Code: Create timezone-aware time objects for the loop ---
+scheduled_times = [
+    datetime.time(13, 0, tzinfo=TARGET_TIMEZONE),
+    datetime.time(1, 0, tzinfo=TARGET_TIMEZONE)
+]
+
 class TrainScheduleCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # --- Corrected Code: Start the task with the corrected loop ---
+        self.post_upcoming_trains.start()
         self.creds = None
         self.calendar_id = os.environ.get('TRAIN_CALENDAR_ID')
         self.events_channel_id = int(os.environ.get('TRAIN_EVENTS_CHANNEL_ID', '0'))
@@ -38,7 +50,6 @@ class TrainScheduleCog(commands.Cog):
     async def on_ready(self):
         """This event listener is called when the cog is loaded and the bot is ready."""
         await self.bot.wait_until_ready()
-        self.post_upcoming_trains.start()
         logging.info("Scheduled train schedule task started.")
 
     def cog_unload(self):
@@ -116,8 +127,6 @@ class TrainScheduleCog(commands.Cog):
             color=discord.Color.dark_gold()
         )
         
-        target_tz = datetime.timezone(datetime.timedelta(hours=-2))
-
         for event in current_events:
             start = event['start'].get('dateTime', event['start'].get('date'))
             summary = event.get('summary', 'No Title')
@@ -126,7 +135,7 @@ class TrainScheduleCog(commands.Cog):
             
             if 'T' in start:
                 start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
-                start_dt_target = start_dt_utc.astimezone(target_tz)
+                start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
                 start_formatted = start_dt_target.strftime('%A, %b %d at %I:%M %p') + " (UTC-2)"
             else:
                 start_dt = datetime.datetime.strptime(start, '%Y-%m-%d').date()
@@ -154,7 +163,7 @@ class TrainScheduleCog(commands.Cog):
 
         await channel.send(embed=embed)
     
-    @tasks.loop(time=[datetime.time(13, 0), datetime.time(1, 0)])
+    @tasks.loop(time=scheduled_times)
     async def post_upcoming_trains(self):
         """A background task to post upcoming train schedules."""
         if self.events_channel_id == 0:
@@ -195,8 +204,6 @@ class TrainScheduleCog(commands.Cog):
                 color=discord.Color.dark_gold()
             )
             
-            target_tz = datetime.timezone(datetime.timedelta(hours=-2))
-
             if not events:
                 embed.description = "No upcoming train departures found in the next 24 hours."
             else:
@@ -207,7 +214,7 @@ class TrainScheduleCog(commands.Cog):
 
                     if 'T' in start:
                         start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
-                        start_dt_target = start_dt_utc.astimezone(target_tz)
+                        start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
                         start_formatted = start_dt_target.strftime('%A, %b %d at %I:%M %p') + " (UTC-2)"
                     else:
                         start_dt = datetime.datetime.strptime(start, '%Y-%m-%d').date()
@@ -252,8 +259,6 @@ class TrainScheduleCog(commands.Cog):
                 color=discord.Color.dark_blue()
             )
 
-            target_tz = datetime.timezone(datetime.timedelta(hours=-2))
-
             for event in events:
                 summary = event.get('summary', 'No Title')
                 start = event['start'].get('dateTime', event['start'].get('date'))
@@ -261,7 +266,7 @@ class TrainScheduleCog(commands.Cog):
 
                 if 'T' in start:
                     start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
-                    start_dt_target = start_dt_utc.astimezone(target_tz)
+                    start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
                     start_formatted = start_dt_target.strftime('%A, %b %d at %I:%M %p') + " (UTC-2)"
                 else:
                     start_dt = datetime.datetime.strptime(start, '%Y-%m-%d').date()
