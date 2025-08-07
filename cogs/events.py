@@ -220,10 +220,9 @@ class EventsCog(commands.Cog):
         """A slash command to get events for the next 3 days privately."""
         await ctx.defer(ephemeral=True)
         try:
-            now = datetime.datetime.utcnow()
+            now = datetime.datetime.now(datetime.timezone.utc)
             time_max_dt = now + datetime.timedelta(days=3)
-            time_max_iso = time_max_dt.isoformat() + "Z"
-            events = await self.get_events(time_min=now.isoformat(), time_max=time_max_iso)
+            events = await self.get_events(time_min=now.isoformat(), time_max=time_max_dt.isoformat())
             
             if not events:
                 await ctx.send("You have no upcoming events in the next 3 days.", ephemeral=True)

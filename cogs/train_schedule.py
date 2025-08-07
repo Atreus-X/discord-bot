@@ -228,10 +228,9 @@ class TrainScheduleCog(commands.Cog):
             return
 
         try:
-            now = datetime.datetime.utcnow()
+            now = datetime.datetime.now(datetime.timezone.utc)
             time_max_dt = now + datetime.timedelta(days=1)
-            time_max_iso = time_max_dt.isoformat() + "Z"
-            events = await self.get_train_events(time_min=now.isoformat(), time_max=time_max_iso)
+            events = await self.get_train_events(time_min=now.isoformat(), time_max=time_max_dt.isoformat())
             
             message_parts = ["**Train Departures for the Next 24 Hours**", "---------------------------------"]
             if not events:
@@ -266,10 +265,9 @@ class TrainScheduleCog(commands.Cog):
         """A slash command to get train departures for the next 3 days privately."""
         await ctx.defer(ephemeral=True)
         try:
-            now = datetime.datetime.utcnow()
+            now = datetime.datetime.now(datetime.timezone.utc)
             time_max_dt = now + datetime.timedelta(days=3)
-            time_max_iso = time_max_dt.isoformat() + "Z"
-            events = await self.get_train_events(time_min=now.isoformat(), time_max=time_max_iso)
+            events = await self.get_train_events(time_min=now.isoformat(), time_max=time_max_dt.isoformat())
 
             if not events:
                 await ctx.send("You have no upcoming train departures in the next 3 days.", ephemeral=True)
