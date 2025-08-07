@@ -25,6 +25,7 @@ class TrainScheduleCog(commands.Cog):
         self.check_for_upcoming_trains.start()
         self.creds = None
         self.calendar_id = os.environ.get('TRAIN_CALENDAR_ID')
+        self.translation_enabled = os.environ.get('TRANSLATE_TRAINS', 'False').lower() in ('true', '1', 't')
         
         # --- MODIFIED: Set up translation client and language-specific channels ---
         self.translate_client = translate.Client()
@@ -162,7 +163,6 @@ class TrainScheduleCog(commands.Cog):
             summary = event.get('summary', 'No Title')
             description = event.get('description')
             start = event['start'].get('dateTime', event['start'].get('date'))
-            link = event.get('htmlLink', 'N/A')
 
             start_dt_utc = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
             start_dt_target = start_dt_utc.astimezone(TARGET_TIMEZONE)
@@ -173,6 +173,9 @@ class TrainScheduleCog(commands.Cog):
                 channel = self.bot.get_channel(channel_id)
                 if not channel:
                     logging.error(f"Could not find channel with ID {channel_id} for language {lang}.")
+                    continue
+                
+                if lang != 'en' and not self.translation_enabled:
                     continue
                 
                 if lang == 'en':
@@ -192,7 +195,6 @@ class TrainScheduleCog(commands.Cog):
                     header,
                     "---------------------------------",
                     f"{time_header} {start_formatted}",
-                    f"**Link:** <{link}>"
                 ]
                 if translated_description:
                     message_parts.append(f"{notes_header} {translated_description}")
@@ -245,7 +247,6 @@ class TrainScheduleCog(commands.Cog):
                     
                     event_details = [f"🚂 **{summary}**", f"**Departure:** {start_formatted}"]
                     if description: event_details.append(f"**Notes:** {description}")
-                    if 'htmlLink' in event: event_details.append(f"[View on Google Calendar](<{event['htmlLink']}>)")
                     message_parts.append("\n".join(event_details))
             
             final_message = "\n\n".join(message_parts)
@@ -285,7 +286,6 @@ class TrainScheduleCog(commands.Cog):
                 
                 event_details = [f"🚂 **{summary}**", f"**Departure:** {start_formatted}"]
                 if description: event_details.append(f"**Notes:** {description}")
-                if 'htmlLink' in event: event_details.append(f"[View on Google Calendar](<{event['htmlLink']}>)")
                 message_parts.append("\n".join(event_details))
 
             final_message = "\n\n".join(message_parts)
