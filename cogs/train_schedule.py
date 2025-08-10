@@ -15,7 +15,7 @@ from google.oauth2 import service_account
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
-ANNOUNCED_TRAIN_EVENTS_FILE = 'announced_train_events.json'
+ANNOUNCED_TRAIN_EVENTS_FILE = 'private/announced_train_events.json'
 
 # --- Timezone Setup ---
 TARGET_TIMEZONE = datetime.timezone(datetime.timedelta(hours=-2))
