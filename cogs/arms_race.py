@@ -20,7 +20,7 @@ ANNOUNCED_AR_FILE = 'private/announced_ar.json'
 # --- Timezone Setup ---
 TARGET_TIMEZONE = datetime.timezone(datetime.timedelta(hours=-2))
 
-class EventsCog(commands.Cog):
+class ArmsRaceCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.creds = None
@@ -216,20 +216,20 @@ class EventsCog(commands.Cog):
         if events_to_announce:
             self.save_announced_events()
 
-    @commands.hybrid_command(name="upcoming_ar", description="Shows your upcoming events for the next 3 days privately.")
+    @commands.hybrid_command(name="upcoming_ar", description="Shows your upcoming events for the next 24 hours privately.")
     async def upcoming_ar(self, ctx: commands.Context):
-        """A slash command to get events for the next 3 days privately."""
+        """A slash command to get events for the next 24 hours privately."""
         await ctx.defer(ephemeral=True)
         try:
             now = datetime.datetime.now(datetime.timezone.utc)
-            time_max_dt = now + datetime.timedelta(days=3)
+            time_max_dt = now + datetime.timedelta(days=1)
             events = await self.get_events(time_min=now.isoformat(), time_max=time_max_dt.isoformat())
             
             if not events:
-                await ctx.send("You have no upcoming events in the next 3 days.", ephemeral=True)
+                await ctx.send("You have no upcoming events in the next 24 hours.", ephemeral=True)
                 return
 
-            message_parts = ["**Your Schedule for the Next 3 Days**", "------------------------------------"]
+            message_parts = ["**Your Schedule for the Next 24 Hours**", "------------------------------------"]
             for event in events:
                 summary = event.get('summary', 'No Title')
                 start = event['start'].get('dateTime', event['start'].get('date'))
@@ -262,4 +262,4 @@ class EventsCog(commands.Cog):
             await ctx.send("An error occurred while fetching your schedule. Please try again later.", ephemeral=True)
 
 async def setup(bot):
-    await bot.add_cog(EventsCog(bot))
+    await bot.add_cog(ArmsRaceCog(bot))
