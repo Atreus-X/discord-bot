@@ -63,7 +63,7 @@ class EventsCog(commands.Cog):
         self.announced_event_ids = self.load_announced_events()
         
         # --- MOVED: Start task after all attributes are initialized ---
-        self.check_for_upcoming_events.start()
+        self.check_for_upcoming_ar.start()
 
     def load_announced_events(self):
         """Loads announced event IDs from a local JSON file."""
@@ -88,7 +88,7 @@ class EventsCog(commands.Cog):
 
     def cog_unload(self):
         """Cancel the background task when the cog is unloaded."""
-        self.check_for_upcoming_events.cancel()
+        self.check_for_upcoming_ar.cancel()
 
     async def get_calendar_service(self):
         SERVICE_ACCOUNT_FILE = 'private/service_account.json'
@@ -148,11 +148,11 @@ class EventsCog(commands.Cog):
             return f"Error translating: {text}" # Return original text on error
 
     @tasks.loop(minutes=1)
-    async def check_for_upcoming_events(self):
+    async def check_for_upcoming_ar(self):
         """Checks for events starting in the current minute and posts them."""
         if not self.language_channels:
             if not hasattr(self, '_logged_no_channels'):
-                logging.error("No event channel IDs are set. Please check your environment variables.")
+                logging.error("No ar channel IDs are set. Please check your environment variables.")
                 self._logged_no_channels = True
             return
 
@@ -216,8 +216,8 @@ class EventsCog(commands.Cog):
         if events_to_announce:
             self.save_announced_events()
 
-    @commands.hybrid_command(name="upcoming_events", description="Shows your upcoming events for the next 3 days privately.")
-    async def upcoming_events(self, ctx: commands.Context):
+    @commands.hybrid_command(name="upcoming_ar", description="Shows your upcoming events for the next 3 days privately.")
+    async def upcoming_ar(self, ctx: commands.Context):
         """A slash command to get events for the next 3 days privately."""
         await ctx.defer(ephemeral=True)
         try:
@@ -258,7 +258,7 @@ class EventsCog(commands.Cog):
                  await ctx.send(final_message, ephemeral=True)
 
         except Exception as e:
-            logging.error(f"Error in upcoming_events command for user {ctx.author.id}", exc_info=True)
+            logging.error(f"Error in upcoming_ar command for user {ctx.author.id}", exc_info=True)
             await ctx.send("An error occurred while fetching your schedule. Please try again later.", ephemeral=True)
 
 async def setup(bot):
