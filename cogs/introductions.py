@@ -192,7 +192,7 @@ class IntroductionsCog(commands.Cog):
                 message = await self.bot.wait_for(
                     'message',
                     check=lambda m: m.author == user and m.channel == temp_channel,
-                    timeout=60.0
+                    timeout=300.0
                 )
                 response_text = message.content.strip().lower()
 
