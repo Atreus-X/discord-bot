@@ -189,7 +189,7 @@ class ArmsRaceCog(commands.Cog):
                 if lang == 'en':
                     translated_summary = summary
                     translated_description = description
-                    header = f"**EVENT STARTING NOW: {translated_summary}**"
+                    header = f"**Arm's Race Event Starting NOW: {translated_summary}**"
                     notes_header = "**Notes:**"
                     time_header = "**Time:**"
                 else:

@@ -12,6 +12,55 @@ introduction_responses = {}
 temp_channels = {}
 temp_channel_timeouts = {}
 
+# --- Language Questions ---
+QUESTIONS = {
+    "English": [
+        "What is your real name? (Optional)",
+        "Where are you from/living?",
+        "What server/alliance are you joining us from?",
+        "What is your native language?",
+        "Do you speak any others?",
+        "Do you have any pets?",
+        "What's your favorite hobby outside of gaming?",
+        "Favorite movie or TV show?",
+        "What's your hidden talent"
+    ],
+    "Spanish": [
+        "¿Cuál es tu nombre real? (Opcional)",
+        "¿De dónde eres o dónde vives?",
+        "¿De qué servidor/alianza te unes a nosotros?",
+        "¿Cuál es tu idioma nativo?",
+        "¿Hablas otros idiomas?",
+        "¿Tienes mascotas?",
+        "¿Cuál es tu pasatiempo favorito fuera de los videojuegos?",
+        "¿Película o programa de televisión favorito?",
+        "¿Cuál es tu talento oculto?"
+    ],
+    "Chinese Traditional": [
+        "你的真實姓名是什麼？ (可選)",
+        "你來自哪裡/現居地？",
+        "你從哪個伺服器/聯盟加入我們？",
+        "你的母語是什麼？",
+        "你還會說其他語言嗎？",
+        "你有寵物嗎？",
+        "除了遊戲，你最喜歡的愛好是什麼？",
+        "最喜歡的電影或電視節目？",
+        "你有什么隐藏的才能？"
+    ],
+    "Korean": [
+        "실명이 무엇입니까? (선택 사항)",
+        "어디서 오셨나요/어디에 사시나요?",
+        "어떤 서버/동맹에서 우리와 함께하게 되셨나요?",
+        "모국어는 무엇입니까?",
+        "다른 언어를 구사하십니까?",
+        "애완동물이 있습니까?",
+        "게임 외에 가장 좋아하는 취미는 무엇입니까?",
+        "가장 좋아하는 영화나 TV 프로그램은?",
+        "숨겨진 재능은 무엇입니까?"
+    ]
+}
+
+
 # --- Timezone Options ---
 TIMEZONE_OPTIONS_BY_REGION = {
     "North America": [
@@ -33,6 +82,31 @@ TIMEZONE_OPTIONS_BY_REGION = {
 }
 
 # --- Custom UI Views ---
+class LanguageSelect(discord.ui.Select):
+    def __init__(self, parent_view):
+        self.parent_view = parent_view
+        options = [
+            discord.SelectOption(label="English", value="English"),
+            discord.SelectOption(label="Español", value="Spanish"),
+            discord.SelectOption(label="繁體中文", value="Chinese Traditional"),
+            discord.SelectOption(label="한국어", value="Korean")
+        ]
+        super().__init__(placeholder="Choose your language...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        introduction_responses[self.parent_view.user_id]["language"] = self.values[0]
+        await interaction.response.send_message(f"You selected: {self.values[0]}", ephemeral=True)
+        self.parent_view.stop()
+
+class LanguageView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=180)
+        self.user_id = user_id
+        self.add_item(LanguageSelect(self))
+
+    async def on_timeout(self):
+        self.stop()
+
 class TimezoneCategorySelect(discord.ui.Select):
     def __init__(self, parent_view):
         self.parent_view = parent_view
@@ -152,7 +226,7 @@ class IntroductionsCog(commands.Cog):
                 "Please go there to answer the questions. You can type 'quit' or 'restart' at any time.",
                 ephemeral=True
             )
-            await temp_channel.send(f"Hello {user.mention}! Please answer the following questions to introduce yourself.")
+            await temp_channel.send(f"Hello {user.mention}! Please select your language to begin.")
 
         except discord.Forbidden:
             logging.error(f"Bot lacks permissions to create channels in guild {guild.id}.")
@@ -173,18 +247,21 @@ class IntroductionsCog(commands.Cog):
 
         timeout_task = self.bot.loop.create_task(channel_timeout())
         self.temp_channel_timeouts[user_id] = timeout_task
+        
+        # --- Language Selection ---
+        language_view = LanguageView(user_id)
+        await temp_channel.send("Please select your language:", view=language_view)
+        
+        await language_view.wait()
 
-        questions = [
-            "What is your real name? (Optional)",
-            "Where are you from/living?",
-            "What server/alliance are you joining us from?",
-            "What is your native language?",
-            "Do you speak any others?",
-            "Do you have any pets?",
-            "What's your favorite hobby outside of gaming?",
-            "Favorite movie or TV show?",
-            "What's your hidden talent"
-        ]
+        if "language" not in self.introduction_responses[user_id]:
+            await temp_channel.send(f"{user.mention}, you took too long to select your language. The process has been cancelled.")
+            await self.cleanup_introduction(user_id)
+            return
+
+        selected_language = self.introduction_responses[user_id]["language"]
+        questions = QUESTIONS[selected_language]
+
 
         for question in questions:
             await temp_channel.send(question)
@@ -247,6 +324,8 @@ class IntroductionsCog(commands.Cog):
         embed.set_footer(text=f"Introduction completed on {discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
         
         for question, answer in self.introduction_responses[user_id].items():
+            if question == "language":
+                continue
             cleaned_question = question.replace('(Optional)', '').strip()
             embed.add_field(name=f"**{cleaned_question}**", value=answer, inline=False)
 
