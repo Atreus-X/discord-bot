@@ -1,4 +1,4 @@
-import discord
+tra discord
 from discord.ext import commands, tasks
 import os
 import datetime
@@ -189,15 +189,15 @@ class TrainScheduleCog(commands.Cog):
                 if lang == 'en':
                     translated_summary = summary
                     translated_description = description
-                    header = f"**TRAIN DEPARTING NOW: {translated_summary}**"
+                    header = f"**Upcoming Train: {translated_summary}**"
                     notes_header = "**Notes:**"
-                    time_header = "**Departure Time:**"
+                    # time_header = "**Departure Time:**"
                 else:
                     translated_summary = self.translate_text(summary, lang)
                     translated_description = self.translate_text(description, lang)
-                    header = f"**{self.translate_text('TRAIN DEPARTING NOW:', lang)} {translated_summary}**"
+                    header = f"**{self.translate_text('Upcoming Train:', lang)} {translated_summary}**"
                     notes_header = f"**{self.translate_text('Notes:', lang)}**"
-                    time_header = f"**{self.translate_text('Departure Time:', lang)}**"
+                    # time_header = f"**{self.translate_text('Departure Time:', lang)}**"
                 
                 message_parts = [
                     header,

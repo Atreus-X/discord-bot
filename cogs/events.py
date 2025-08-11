@@ -189,13 +189,13 @@ class EventsCog(commands.Cog):
                 if lang == 'en':
                     translated_summary = summary
                     translated_description = description
-                    header = f"**EVENT STARTING NOW: {translated_summary}**"
+                    header = f"**{translated_summary}**"
                     notes_header = "**Notes:**"
                     time_header = "**Time:**"
                 else:
                     translated_summary = self.translate_text(summary, lang)
                     translated_description = self.translate_text(description, lang)
-                    header = f"**{self.translate_text('EVENT STARTING NOW:', lang)} {translated_summary}**"
+                    header = f"**{translated_summary}**"
                     notes_header = f"**{self.translate_text('Notes:', lang)}**"
                     time_header = f"**{self.translate_text('Time:', lang)}**"
 
@@ -216,7 +216,7 @@ class EventsCog(commands.Cog):
         if events_to_announce:
             self.save_announced_events()
 
-    @commands.hybrid_command(name="upcoming_events", description="Shows your upcoming events for the next 3 days privately.")
+    @commands.hybrid_command(name="upcoming_events", description="Shows the upcoming events for the next 3 days privately.")
     async def upcoming_events(self, ctx: commands.Context):
         """A slash command to get events for the next 3 days privately."""
         await ctx.defer(ephemeral=True)
@@ -226,10 +226,10 @@ class EventsCog(commands.Cog):
             events = await self.get_events(time_min=now.isoformat(), time_max=time_max_dt.isoformat())
             
             if not events:
-                await ctx.send("You have no upcoming events in the next 3 days.", ephemeral=True)
+                await ctx.send("There are no upcoming events in the next 3 days.", ephemeral=True)
                 return
 
-            message_parts = ["**Your Schedule for the Next 3 Days**", "------------------------------------"]
+            message_parts = ["**The Event Schedule for the Next 3 Days**", "------------------------------------"]
             for event in events:
                 summary = event.get('summary', 'No Title')
                 start = event['start'].get('dateTime', event['start'].get('date'))
