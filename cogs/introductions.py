@@ -8,7 +8,7 @@ import logging
 INTRO_CHANNEL_ID = int(os.environ.get('INTRO_CHANNEL_ID', '0'))
 
 # --- Data Storage ---
-introduction_responses = {}
+# REMOVED global introduction_responses dictionary
 temp_channels = {}
 temp_channel_timeouts = {}
 
@@ -94,14 +94,15 @@ class LanguageSelect(discord.ui.Select):
         super().__init__(placeholder="Choose your language...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        introduction_responses[self.parent_view.user_id]["language"] = self.values[0]
+        self.parent_view.cog.introduction_responses[self.parent_view.user_id]["language"] = self.values[0]
         await interaction.response.send_message(f"You selected: {self.values[0]}", ephemeral=True)
         self.parent_view.stop()
 
 class LanguageView(discord.ui.View):
-    def __init__(self, user_id):
+    def __init__(self, user_id, cog):
         super().__init__(timeout=180)
         self.user_id = user_id
+        self.cog = cog
         self.add_item(LanguageSelect(self))
 
     async def on_timeout(self):
@@ -130,14 +131,15 @@ class TimezoneDetailSelect(discord.ui.Select):
         super().__init__(placeholder="Choose your timezone...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        introduction_responses[self.user_id]["Timezone"] = self.values[0]
+        self.parent_view.cog.introduction_responses[self.user_id]["Timezone"] = self.values[0]
         await interaction.response.send_message(f"You selected: {self.values[0]}", ephemeral=True)
         self.parent_view.stop()
 
 class MultiSelectView(discord.ui.View):
-    def __init__(self, user_id):
+    def __init__(self, user_id, cog):
         super().__init__(timeout=180)
         self.user_id = user_id
+        self.cog = cog
         self.add_item(TimezoneCategorySelect(self))
 
     async def on_timeout(self):
@@ -249,7 +251,7 @@ class IntroductionsCog(commands.Cog):
         self.temp_channel_timeouts[user_id] = timeout_task
         
         # --- Language Selection ---
-        language_view = LanguageView(user_id)
+        language_view = LanguageView(user_id, self)
         await temp_channel.send("Please select your language:", view=language_view)
         
         await language_view.wait()
@@ -295,7 +297,7 @@ class IntroductionsCog(commands.Cog):
 
         # --- Timezone Question ---
         await temp_channel.send("Please select your timezone:")
-        view = MultiSelectView(user_id)
+        view = MultiSelectView(user_id, self)
         await temp_channel.send("First, choose a region:", view=view)
 
         try:
