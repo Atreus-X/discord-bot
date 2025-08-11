@@ -8,7 +8,6 @@ import logging
 INTRO_CHANNEL_ID = int(os.environ.get('INTRO_CHANNEL_ID', '0'))
 
 # --- Data Storage ---
-# REMOVED global introduction_responses dictionary
 temp_channels = {}
 temp_channel_timeouts = {}
 
@@ -318,23 +317,20 @@ class IntroductionsCog(commands.Cog):
                 del self.temp_channel_timeouts[user_id]
 
         # --- Compile and Post Introduction ---
-        embed = discord.Embed(
-            title=f"New Introduction from {user.display_name}",
-            color=discord.Color.blue()
-        )
-        embed.set_thumbnail(url=user.avatar.url)
-        embed.set_footer(text=f"Introduction completed on {discord.utils.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        message_parts = [f"**New Introduction from {user.display_name}**", "---------------------------------"]
         
         for question, answer in self.introduction_responses[user_id].items():
             if question == "language":
                 continue
             cleaned_question = question.replace('(Optional)', '').strip()
-            embed.add_field(name=f"**{cleaned_question}**", value=answer, inline=False)
+            message_parts.append(f"**{cleaned_question}**\n{answer}")
+
+        final_message = "\n\n".join(message_parts)
 
         target_channel = self.bot.get_channel(INTRO_CHANNEL_ID)
         if target_channel:
             try:
-                await target_channel.send(embed=embed)
+                await target_channel.send(final_message)
                 await temp_channel.send("Your introduction has been posted to the introductions channel!")
             except discord.Forbidden:
                 await temp_channel.send(f"Error: I don't have permissions to post in the designated introduction channel ({target_channel.mention}). Please check my permissions in that channel.", ephemeral=False)
