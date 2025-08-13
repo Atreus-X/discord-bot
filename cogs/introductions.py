@@ -154,7 +154,6 @@ class IntroductionsCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.introduction_responses = {}
-        self.temp_channels = {}
         self.temp_channel_timeouts = {}
 
     async def cleanup_introduction(self, user_id):
@@ -163,39 +162,10 @@ class IntroductionsCog(commands.Cog):
         if user_id in self.temp_channel_timeouts:
             self.temp_channel_timeouts[user_id].cancel()
             del self.temp_channel_timeouts[user_id]
-        if user_id in self.temp_channels:
-            temp_channel = self.temp_channels[user_id]
-            try:
-                if self.bot.get_channel(temp_channel.id):
-                    await temp_channel.delete(reason="Introduction process completed or cancelled")
-            except discord.Forbidden:
-                logging.warning(f"Bot lacks permission to delete temporary channel for user {user_id} ({temp_channel.name}).")
-                user = self.bot.get_user(user_id)
-                if user:
-                    try:
-                        await user.send(f"I've completed your introduction but couldn't delete your temporary channel ({temp_channel.mention}). Please delete it manually if you're done.")
-                    except discord.Forbidden:
-                        logging.warning(f"Could not send DM to user {user_id} about channel deletion failure.")
-            except Exception as e:
-                logging.error(f"Error deleting temporary channel for user {user_id}", exc_info=e)
-                user = self.bot.get_user(user_id)
-                if user:
-                    try:
-                        await user.send(f"An error occurred while deleting your temporary channel ({temp_channel.mention}): {e}. Please delete it manually if you're done.")
-                    except discord.Forbidden:
-                        logging.warning(f"Could not send DM to user {user_id} about channel deletion failure.")
-            finally:
-                del self.temp_channels[user_id]
 
-    @commands.hybrid_command(name="introductions", description="Start the introduction process to introduce yourself in a private channel.")
+    @commands.hybrid_command(name="introductions", description="Start the introduction process to introduce yourself via private message.")
     async def introductions_slash(self, ctx: commands.Context):
         user = ctx.author
-        guild = ctx.guild
-
-        if not guild:
-            await ctx.send("This command can only be used in a server.", ephemeral=True)
-            return
-
         user_id = user.id
 
         if user_id in self.introduction_responses:
@@ -204,59 +174,45 @@ class IntroductionsCog(commands.Cog):
 
         await ctx.defer(ephemeral=True)
 
-        channel_name = f"intro-{user.name.lower().replace(' ', '-')}"
-        channel_name = "".join(c for c in channel_name if c.isalnum() or c == '-').lower()
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
-        }
-
         try:
-            temp_channel = await guild.create_text_channel(
-                channel_name,
-                overwrites=overwrites,
-                reason=f"Introduction channel for {user.display_name}"
-            )
-            self.temp_channels[user_id] = temp_channel
+            dm_channel = await user.create_dm()
             self.introduction_responses[user_id] = {}
 
             await ctx.send(
-                f"I've created a private channel for your introduction: {temp_channel.mention}. "
+                f"I've sent you a private message to start your introduction. "
                 "Please go there to answer the questions. You can type 'quit' or 'restart' at any time.",
                 ephemeral=True
             )
-            await temp_channel.send(f"Hello {user.mention}! Please select your language to begin.")
+            await dm_channel.send(f"Hello {user.mention}! Please select your language to begin.")
 
         except discord.Forbidden:
-            logging.error(f"Bot lacks permissions to create channels in guild {guild.id}.")
-            await ctx.send("I don't have permissions to create channels. Please check my role permissions.", ephemeral=True)
+            logging.error(f"Cannot send DMs to user {user_id}.")
+            await ctx.send("I can't send you a private message. Please check your privacy settings.", ephemeral=True)
             await self.cleanup_introduction(user_id)
             return
         except Exception as e:
-            logging.error(f"Error creating intro channel for user {user_id}", exc_info=e)
-            await ctx.send(f"An error occurred while creating the channel: {e}", ephemeral=True)
+            logging.error(f"Error starting introduction for user {user_id}", exc_info=e)
+            await ctx.send(f"An error occurred while starting the introduction: {e}", ephemeral=True)
             await self.cleanup_introduction(user_id)
             return
 
-        async def channel_timeout():
+        async def dm_timeout():
             await asyncio.sleep(600)
-            if user_id in self.temp_channels:
-                await self.temp_channels[user_id].send(f"{user.mention}, you took too long to complete your introduction. The process has been cancelled.")
+            if user_id in self.introduction_responses:
+                await dm_channel.send(f"{user.mention}, you took too long to complete your introduction. The process has been cancelled.")
                 await self.cleanup_introduction(user_id)
 
-        timeout_task = self.bot.loop.create_task(channel_timeout())
+        timeout_task = self.bot.loop.create_task(dm_timeout())
         self.temp_channel_timeouts[user_id] = timeout_task
         
         # --- Language Selection ---
         language_view = LanguageView(user_id, self)
-        await temp_channel.send("Please select your language:", view=language_view)
+        await dm_channel.send("Please select your language:", view=language_view)
         
         await language_view.wait()
 
         if "language" not in self.introduction_responses[user_id]:
-            await temp_channel.send(f"{user.mention}, you took too long to select your language. The process has been cancelled.")
+            await dm_channel.send(f"{user.mention}, you took too long to select your language. The process has been cancelled.")
             await self.cleanup_introduction(user_id)
             return
 
@@ -265,21 +221,21 @@ class IntroductionsCog(commands.Cog):
 
 
         for question in questions:
-            await temp_channel.send(question)
+            await dm_channel.send(question)
             try:
                 message = await self.bot.wait_for(
                     'message',
-                    check=lambda m: m.author == user and m.channel == temp_channel,
+                    check=lambda m: m.author == user and m.channel == dm_channel,
                     timeout=300.0
                 )
                 response_text = message.content.strip().lower()
 
                 if response_text == 'quit':
-                    await temp_channel.send("Introduction process cancelled.")
+                    await dm_channel.send("Introduction process cancelled.")
                     await self.cleanup_introduction(user_id)
                     return
                 elif response_text == 'restart':
-                    await temp_channel.send("Restarting introduction process...")
+                    await dm_channel.send("Restarting introduction process...")
                     await self.cleanup_introduction(user_id)
                     # Re-invoking the command correctly
                     new_ctx = await self.bot.get_context(ctx.message) if ctx.message else ctx
@@ -288,25 +244,25 @@ class IntroductionsCog(commands.Cog):
 
                 self.introduction_responses[user_id][question] = message.content
             except asyncio.TimeoutError:
-                await temp_channel.send(f"{user.mention}, you took too long to respond to the last question. The process has been cancelled.")
+                await dm_channel.send(f"{user.mention}, you took too long to respond to the last question. The process has been cancelled.")
                 await self.cleanup_introduction(user_id)
                 return
             except asyncio.CancelledError:
                 return
 
         # --- Timezone Question ---
-        await temp_channel.send("Please select your timezone:")
+        await dm_channel.send("Please select your timezone:")
         view = MultiSelectView(user_id, self)
-        await temp_channel.send("First, choose a region:", view=view)
+        await dm_channel.send("First, choose a region:", view=view)
 
         try:
             await view.wait()
             if "Timezone" not in self.introduction_responses[user_id]:
-                await temp_channel.send(f"{user.mention}, you took too long to select your timezone. The process has been cancelled.")
+                await dm_channel.send(f"{user.mention}, you took too long to select your timezone. The process has been cancelled.")
                 await self.cleanup_introduction(user_id)
                 return
         except asyncio.TimeoutError:
-            await temp_channel.send(f"{user.mention}, you took too long to select your timezone. The process has been cancelled.")
+            await dm_channel.send(f"{user.mention}, you took too long to select your timezone. The process has been cancelled.")
             await self.cleanup_introduction(user_id)
             return
         except asyncio.CancelledError:
@@ -331,15 +287,15 @@ class IntroductionsCog(commands.Cog):
         if target_channel:
             try:
                 await target_channel.send(final_message)
-                await temp_channel.send("Your introduction has been posted to the introductions channel!")
+                await dm_channel.send("Your introduction has been posted to the introductions channel!")
             except discord.Forbidden:
-                await temp_channel.send(f"Error: I don't have permissions to post in the designated introduction channel ({target_channel.mention}). Please check my permissions in that channel.", ephemeral=False)
+                await dm_channel.send(f"Error: I don't have permissions to post in the designated introduction channel ({target_channel.mention}). Please check my permissions in that channel.", ephemeral=False)
                 logging.error(f"Bot lacks permissions to post in channel ID {INTRO_CHANNEL_ID}")
             except Exception as e:
-                await temp_channel.send(f"An unexpected error occurred while posting your introduction: {e}", ephemeral=False)
+                await dm_channel.send(f"An unexpected error occurred while posting your introduction: {e}", ephemeral=False)
                 logging.error(f"Error posting introduction for {user.id}", exc_info=e)
         else:
-            await temp_channel.send("Error: Could not find the introduction channel. Please contact an admin to ensure `INTRO_CHANNEL_ID` is correct.", ephemeral=False)
+            await dm_channel.send("Error: Could not find the introduction channel. Please contact an admin to ensure `INTRO_CHANNEL_ID` is correct.", ephemeral=False)
             logging.error(f"Could not find the introduction channel with ID {INTRO_CHANNEL_ID}.")
 
         await self.cleanup_introduction(user_id)
