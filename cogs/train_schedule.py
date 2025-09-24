@@ -20,6 +20,61 @@ ANNOUNCED_TRAIN_EVENTS_FILE = 'private/announced_train_events.json'
 # --- Timezone Setup ---
 TARGET_TIMEZONE = datetime.timezone(datetime.timedelta(hours=-2))
 
+# --- Paginator View ---
+class PaginatorView(discord.ui.View):
+    def __init__(self, pages, ctx):
+        super().__init__(timeout=180) # 3 minute timeout
+        self.pages = pages
+        self.current_page = 0
+        self.ctx = ctx
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.children[0].disabled = self.current_page == 0
+        self.children[1].disabled = self.current_page == len(self.pages) - 1
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.blurple)
+    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("You can't control this pagination.", ephemeral=True)
+            return
+            
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.update_buttons()
+            await interaction.response.edit_message(content=self.pages[self.current_page], view=self)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.blurple)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("You can't control this pagination.", ephemeral=True)
+            return
+
+        if self.current_page < len(self.pages) - 1:
+            self.current_page += 1
+            self.update_buttons()
+            await interaction.response.edit_message(content=self.pages[self.current_page], view=self)
+            
+    @discord.ui.button(label="Exit", style=discord.ButtonStyle.red)
+    async def exit_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("You can't control this pagination.", ephemeral=True)
+            return
+
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
+        
+    async def on_timeout(self):
+        try:
+            for child in self.children:
+                child.disabled = True
+            original_response = await self.ctx.interaction.original_response()
+            await original_response.edit(view=self)
+        except Exception:
+            pass
+
 class TrainScheduleCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -194,8 +249,6 @@ class TrainScheduleCog(commands.Cog):
                     notes_header = "**Notes:**"
                     message_parts.extend([
                         header,
-                        # "---------------------------------",
-                        # f"**Departure Time:** {start_formatted}",
                     ])
                 else:
                     translated_summary = self.translate_text(summary, lang)
@@ -205,8 +258,6 @@ class TrainScheduleCog(commands.Cog):
                     departure_time_header = f"**{self.translate_text('Departure Time:', lang)}**"
                     message_parts.extend([
                         header,
-                        # "---------------------------------",
-                        # f"{departure_time_header} {start_formatted}",
                     ])
 
                 if translated_description:
@@ -279,7 +330,7 @@ class TrainScheduleCog(commands.Cog):
                 await ctx.send("You have no upcoming train departures in the next 3 days.", ephemeral=True)
                 return
 
-            message_parts = ["**Your Train Schedule for the Next 3 Days**", "------------------------------------------"]
+            event_strings = []
             for event in events:
                 summary = event.get('summary', 'No Title')
                 start = event['start'].get('dateTime', event['start'].get('date'))
@@ -294,18 +345,36 @@ class TrainScheduleCog(commands.Cog):
                 
                 event_details = [f"🚂 **{summary}**", f"**Departure:** {start_formatted}"]
                 if description: event_details.append(f"**Notes:** {description}")
-                message_parts.append("\n".join(event_details))
+                event_strings.append("\n".join(event_details))
 
-            final_message = "\n\n".join(message_parts)
+            pages = []
+            current_page = "**Your Train Schedule for the Next 3 Days**\n------------------------------------------\n\n"
+            for event_str in event_strings:
+                if len(current_page) + len(event_str) + 2 > 1900:
+                    pages.append(current_page)
+                    current_page = f"**Your Train Schedule for the Next 3 Days (cont.)**\n------------------------------------------\n\n" + event_str
+                else:
+                    current_page += event_str + "\n\n"
+            pages.append(current_page)
+            
+            total_pages = len(pages)
+            for i in range(total_pages):
+                pages[i] += f"\n*Page {i+1} of {total_pages} | Requested by {ctx.author.display_name}*"
             
             if not ctx.interaction:
                 try:
-                    await ctx.author.send(final_message)
+                    for page in pages:
+                        await ctx.author.send(page)
                     await ctx.send("I've sent your train schedule to your DMs.", delete_after=10)
                 except discord.Forbidden:
                     await ctx.send("I couldn't send you a DM. Please check your privacy settings.")
+                return
+
+            if len(pages) == 1:
+                await ctx.send(pages[0], ephemeral=True)
             else:
-                 await ctx.send(final_message, ephemeral=True)
+                view = PaginatorView(pages, ctx)
+                await ctx.send(pages[0], view=view, ephemeral=True)
         except Exception as e:
             logging.error(f"Error in upcoming_trains command for user {ctx.author.id}", exc_info=True)
             await ctx.send("An error occurred while fetching your train schedule.", ephemeral=True)
